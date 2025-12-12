@@ -16,12 +16,15 @@ node_modules
 #!.yarn/cache
 .pnp.*
 
-# Virtual Environment
+# virtual env
 venv/
 .venv/
 env/
 
-# Large Data and Computed Files
+# credentials & local environment variables
+.env
+
+# large data files
 *.csv
 *.npy
 data/

@@ -1,288 +1,287 @@
-import streamlit as st
 import pandas as pd
+import streamlit as st
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
+
+
+st.set_page_config(layout="wide", page_title="Customer Feedback Strategy Dashboard")
 
 @st.cache_data
-def load_data(filepath='phase4_final_dashboard_data.csv'):
+def load_data():
     try:
-        df = pd.read_csv(filepath)
-
-        numeric_cols = ['Frequency', 'Avg_Sentiment', 'Cost_of_Fix_M', 'Projected_Gain_M', 'Net_Impact_M', 'Priority_Score']
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        total_low_rated_reviews = df['Frequency'].sum()
-        high_priority_topics = len(df[df['Priority_Score'] >= df['Priority_Score'].quantile(0.8)]) # Top 20%
-        avg_negative_sentiment = df['Avg_Sentiment'].abs().mean()
-        
-        return df, total_low_rated_reviews, high_priority_topics, avg_negative_sentiment
+        df = pd.read_csv("phase4_final_dashboard_data.csv")
     except FileNotFoundError:
-        st.error("Data file 'phase4_final_dashboard_data.csv' not found. Please run the data_processor, topic_modeling, and priority_ranking scripts first.")
+        st.error("Error: 'phase4_final_dashboard_data.csv' not found. Please ensure the file is in the same directory.")
+        st.stop()
+        
+    df['Value_to_Cost_Ratio'] = df.apply(
+        lambda row: row['Projected_Gain_M'] / row['Cost_of_Fix_M'] 
+        if row['Cost_of_Fix_M'] != 0 else np.inf, axis=1
+    )
+    return df
 
-        return pd.DataFrame(), 0, 0, 0.0
+df = load_data()
 
-df_final, total_low_rated_reviews, high_priority_topics, avg_negative_sentiment = load_data()
+# calculate global metrics
+total_frequency = df['Frequency'].sum()
+total_cost = df['Cost_of_Fix_M'].sum()
+total_gain = df['Projected_Gain_M'].sum()
+total_net_impact = df['Net_Impact_M'].sum()
 
-st.set_page_config(
-    page_title="R&D Insight: Product Prioritization Dashboard",
-    page_icon="✨",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+global_roi = total_gain / total_cost if total_cost != 0 else np.inf
 
-st.markdown("""
-    <style>
-    .main {
-        background-color: #FAF9F6;
+# sentiment summary
+def get_sentiment_summary(data):
+    NEGATIVE_THRESHOLD = -0.10
+    POSITIVE_THRESHOLD = 0.10
+    
+    negative_topics = data[data['Avg_Sentiment'] <= NEGATIVE_THRESHOLD]
+    positive_topics = data[data['Avg_Sentiment'] >= POSITIVE_THRESHOLD]
+    neutral_topics = data[(data['Avg_Sentiment'] > NEGATIVE_THRESHOLD) & (data['Avg_Sentiment'] < POSITIVE_THRESHOLD)]
+    
+    return {
+        'negative_count': len(negative_topics),
+        'neutral_count': len(neutral_topics),
+        'positive_count': len(positive_topics),
+        'total_topics': len(data),
+        'top_negative': negative_topics.sort_values(by='Avg_Sentiment', ascending=True).head(5)
     }
-    .stMetric {
-        background-color: #FFFFFF;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    h1 {
-        color: #2C2C2C;
-        font-weight: 300;
-        letter-spacing: 1px;
-    }
-    h2, h3 {
-        color: #4A4A4A;
-        font-weight: 300;
-    }
-    .stDataFrame {
-        background-color: #FFFFFF;
-    }
-    .sidebar .sidebar-content {
-        background-color: #F5F5F3;
-    }
-    </style>
-    """, unsafe_allow_html=True)
 
-# header
-st.markdown("""
-    <div style="text-align: center; padding: 2rem 0; border-bottom: 1px solid #E8E8E8; margin-bottom: 2rem;">
-        <h1 style="margin-bottom: 0.5rem;">✨ R&D Insight: Product Prioritization Dashboard</h1>
-        <p style="color: #8B8B8B; font-size: 0.9rem; margin-top: 0;">Customer Review Text Analysis | Phase 2-4 Integration</p>
-    </div>
-    """, unsafe_allow_html=True)
+# generate executive summary narrative
+def generate_executive_summary_narrative(total_net_impact, global_roi, df):
+    top_roi_topic = df.sort_values(by='Value_to_Cost_Ratio', ascending=False).iloc[0]
+    top_threat = df.sort_values(by='Avg_Sentiment', ascending=True).iloc[0]
 
-# sidebar filters
-st.sidebar.header("🔍 Filters")
-st.sidebar.markdown("---")
+    summary = f"""
+    The comprehensive analysis of customer feedback reveals a total untapped financial opportunity of **\${total_net_impact:,.2f} million** across all identified topics. The overall investment strategy maintains a healthy **{global_roi:,.2f}:1 Global ROI**.
+    
+    Key strategic focus areas must balance absolute value with brand risk mitigation:
+    
+    * **Most Efficient Investment (High ROI):** The topic '{top_roi_topic['Topic_Name']}' offers an exceptional **{top_roi_topic['Value_to_Cost_Ratio']:,.2f}:1 ROI** and a substantial net impact of \${top_roi_topic['Net_Impact_M']:,.2f}M. This should be prioritized for immediate action due to efficiency.
+    * **Most Urgent Brand Threat (Sentiment Risk):** Addressing '{top_threat['Topic_Name']}' is critical for immediate brand health, as it currently carries the most severe negative sentiment ({top_threat['Avg_Sentiment']:+.3f}).
+    """
+    return summary
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-    <div style="color: #8B8B8B; font-size: 0.85rem; padding: 1rem;">
-        <p><strong>Data Source:</strong> Sephora Review Analysis (Kaggle)</p>
-        <p><strong>Last Analysis Run:</strong> {}</p>
-    </div>
-    """.format(datetime.now().strftime("%B %d, %Y")), unsafe_allow_html=True)
-
-if df_final.empty:
-    st.warning("Dashboard data is empty. Please run the full ETL pipeline (data_processor.py -> topic_modeling.py -> priority_ranking.py -> financial_modeling.py) to generate the input file.")
-else:
-
-    st.markdown("### Key Performance Indicators")
+# streamlit app sections
+def display_welcome_section(summary_narrative):
+    st.title("💡 Customer Feedback: Strategy Formulation Dashboard")
+    st.markdown("## Welcome to Your Strategic Roadmap!")
+    st.markdown(summary_narrative)
     st.markdown("---")
 
+
+def display_kpi_header(total_net_impact, total_cost, global_roi):
+    st.header("1. Strategic Investment Potential: Key Performance Indicators")
+    
     col1, col2, col3 = st.columns(3)
-    
-    total_projected_revenue_retained = df_final['Projected_Gain_M'].sum()
-    
+
     with col1:
         st.metric(
-            label="Total Negative Review Volume (Rating $\le3$)",
-            value=f"{total_low_rated_reviews:,}",
+            label="Total Net Impact (Overall Opportunity)",
+            value=f"${total_net_impact:,.2f}M",
+            delta="Maximum Potential Profit across all solutions"
         )
     
     with col2:
         st.metric(
-            label="High-Priority Topics Identified (Top 20% Rank)",
-            value=high_priority_topics,
+            label="Total Estimated Cost of Fix",
+            value=f"${total_cost:,.2f}M",
+            delta="Total Required Investment"
         )
     
     with col3:
+        roi_value = "∞" if np.isinf(global_roi) else f"{global_roi:,.2f}:1"
         st.metric(
-            label="Average Negative Sentiment Intensity (0 to -1)",
-            value=f"-{avg_negative_sentiment:.2f}",
-            delta_color="off"
+            label="Global Value-to-Cost Ratio (ROI)",
+            value=roi_value,
+            delta="Value Generated Per $1 Spent (Overall)",
+            delta_color="normal"
         )
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # --- R&D Prioritization Chart ---
-    st.markdown("### R&D Prioritization Analysis")
-    st.markdown("*Top Topics Ranked by Cost-Adjusted Priority Score*")
     st.markdown("---")
+
+
+def display_key_insights(data):
+    st.header("2. Key Insights: Efficiency (ROI) and Urgency (Sentiment)")
+
+    st.subheader("2.A. High ROI Opportunities (Investment Efficiency)")
+    st.markdown("These topics offer the **highest Value-to-Cost Ratio**, representing "
+                "projects where a small investment yields a massive projected return.")
     
-    # horizontal bar chart
-    df_prioritization = df_final.sort_values(by='Priority_Score', ascending=True).tail(10)
+    finite_roi_data = data[~np.isinf(data['Value_to_Cost_Ratio'])].copy()
+    top_5_roi = finite_roi_data.sort_values(by='Value_to_Cost_Ratio', ascending=False).head(5)
     
-    fig_prioritization = px.bar(
-        df_prioritization,
-        x='Priority_Score',
-        y='Topic_Name',
-        orientation='h',
-        color='Priority_Score',
-        color_continuous_scale=['#E8E8E8', '#D4A574', '#B8956A'],
-        text='Priority_Score',
-        labels={'Priority_Score': 'Priority Score', 'Topic_Name': 'Complaint Theme (Topic Modeling Output)'}
+    top_5_roi['ROI (Value:Cost)'] = top_5_roi['Value_to_Cost_Ratio'].apply(lambda x: f"{x:,.2f}:1")
+    top_5_roi['Net Impact (M)'] = top_5_roi['Net_Impact_M'].apply(lambda x: f"${x:,.2f}M")
+    top_5_roi.rename(columns={'Topic_Name': 'Topic Driver', 'Recommended_Action_Type': 'Action'}, inplace=True)
+
+    st.dataframe(top_5_roi[['Topic Driver', 'ROI (Value:Cost)', 'Net Impact (M)', 'Action']], 
+                 use_container_width=True, hide_index=True)
+
+    sentiment_data = get_sentiment_summary(data)
+    
+    st.subheader("2.B. Customer Loyalty & Risk Insights (Brand Urgency)")
+    st.markdown(f"**Overall Sentiment Health Check:** Out of {sentiment_data['total_topics']} topics, "
+                f"**{sentiment_data['negative_count']}** are Negative ($\le -0.10$), and **{sentiment_data['positive_count']}** are Positive ($\ge +0.10$).")
+
+    st.markdown("**Top 5 Brand Threats (Most Negative Sentiment):** Addressing these is crucial for immediate risk mitigation.")
+    
+    top_negative = sentiment_data['top_negative'].copy()
+    top_negative['Avg Sentiment'] = top_negative['Avg_Sentiment'].apply(lambda x: f"{x:+.3f}")
+    top_negative['Net Impact (M)'] = top_negative['Net_Impact_M'].apply(lambda x: f"${x:,.2f}M")
+    
+    st.dataframe(top_negative[['Topic_Name', 'Avg Sentiment', 'Net Impact (M)']], 
+                 use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+
+def display_roadmap_table(data):
+    st.header("3. 🎯 Full Actionable Roadmap: All Topics")
+    st.markdown(
+        """
+        The table below provides **all scores and actions** for every topic, ranked by **Priority Score**. 
+        Use the filters in the sidebar to segment the data and find your next high-impact project.
+        """
     )
     
-    fig_prioritization.update_traces(
-        texttemplate='%{text:.1f}',
-        textposition='outside',
-        marker_line_color='#FFFFFF',
-        marker_line_width=1
+    st.sidebar.header("Data Segmentation Filters")
+    
+    # filter by action type
+    action_options = ['All Action Types'] + sorted(data['Recommended_Action_Type'].unique().tolist())
+    selected_action = st.sidebar.selectbox(
+        '1. Filter by Recommended Action Type:',
+        options=action_options,
+        index=0
     )
     
-    fig_prioritization.update_layout(
-        plot_bgcolor='#FFFFFF',
-        paper_bgcolor='#FAF9F6',
-        font=dict(color='#4A4A4A', size=11),
-        height=500,
-        showlegend=False,
-        xaxis=dict(
-            title_font=dict(size=12, color='#4A4A4A'),
-            gridcolor='#F0F0F0',
-            range=[0, df_prioritization['Priority_Score'].max() * 1.2]
-        ),
-        yaxis=dict(
-            title_font=dict(size=12, color='#4A4A4A'),
-            categoryorder='total ascending'
-        ),
-        margin=dict(l=150, r=50, t=20, b=50)
+    # filter sliders
+    min_net_impact_val = data['Net_Impact_M'].min()
+    max_net_impact_val = data['Net_Impact_M'].max()
+    net_impact_threshold = st.sidebar.slider(
+        '2. Minimum Net Impact (M):',
+        min_value=float(min_net_impact_val),
+        max_value=float(max_net_impact_val),
+        value=float(min_net_impact_val),
+        step=0.5,
+        format='%.2f'
     )
     
-    st.plotly_chart(fig_prioritization, use_container_width=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # --- Financial Impact Modeling ---
-    st.markdown("### Financial Impact Modeling")
-    st.markdown("*Business Justification (Cost vs. Gain) for Top Topics*")
-    st.markdown("---")
-    
-    col_fin1, col_fin2 = st.columns([1, 2])
-    
-    with col_fin1:
-        st.markdown("#### Total Projected Annual Revenue Retained")
-        st.markdown(f"""
-            <div style="background-color: #FFFFFF; padding: 2rem; border-radius: 8px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                <h1 style="color: #B8956A; margin: 0; font-size: 3rem;">${total_projected_revenue_retained:.1f}M</h1>
-                <p style="color: #8B8B8B; margin-top: 0.5rem;">Annual Projection (Estimated from LTV Retention)</p>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    with col_fin2:
-        st.markdown("#### Cost vs. Projected Gain Analysis")
-        
-        df_financial = df_final.head(8).sort_values(by='Priority_Score', ascending=False)
-        topics_for_financial = df_financial['Topic_Name'].tolist()
-        cost_data = df_financial['Cost_of_Fix_M'].tolist()
-        gain_data = df_financial['Projected_Gain_M'].tolist()
-        net_impact = df_financial['Net_Impact_M'].tolist()
-        
-        fig_financial = go.Figure()
-        
-        fig_financial.add_trace(go.Bar(
-            name='Cost of Fix (Input)',
-            x=topics_for_financial,
-            y=[-c for c in cost_data],
-            marker_color='#E8E8E8',
-            text=[f'${c:.1f}M' for c in cost_data],
-            textposition='outside'
-        ))
-        
-        fig_financial.add_trace(go.Bar(
-            name='Projected Gain (Output)',
-            x=topics_for_financial,
-            y=gain_data,
-            marker_color='#B8956A',
-            text=[f'${g:.1f}M' for g in gain_data],
-            textposition='outside'
-        ))
-        
-        fig_financial.add_trace(go.Scatter(
-            name='Net Impact (ROI)',
-            x=topics_for_financial,
-            y=net_impact,
-            mode='lines+markers',
-            line=dict(color='#4A4A4A', width=2),
-            marker=dict(size=8, color='#4A4A4A'),
-            text=[f'${n:.1f}M' for n in net_impact],
-            textposition='top center'
-        ))
-        
-        fig_financial.update_layout(
-            plot_bgcolor='#FFFFFF',
-            paper_bgcolor='#FAF9F6',
-            font=dict(color='#4A4A4A', size=10),
-            height=400,
-            barmode='group',
-            xaxis=dict(
-                title='Topic',
-                title_font=dict(size=11, color='#4A4A4A'),
-                gridcolor='#F0F0F0',
-                tickangle=-45
-            ),
-            yaxis=dict(
-                title='Amount ($M)',
-                title_font=dict(size=11, color='#4A4A4A'),
-                gridcolor='#F0F0F0'
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            margin=dict(l=50, r=50, t=50, b=100)
-        )
-        
-        st.plotly_chart(fig_financial, use_container_width=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # --- Prescriptive Action Mapping ---
-    st.markdown("### Prescriptive Action Mapping")
-    st.markdown("*Recommended Actions by Topic (Linked to Responsible Departments)*")
-    st.markdown("---")
-    
-    df_actions = df_final[['Topic_Name', 'Recommended_Action_Type', 'Net_Impact_M']].copy()
-    
-    st.dataframe(
-        df_actions.head(10),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Topic_Name": st.column_config.TextColumn(
-                "Complaint Theme",
-                width="medium"
-            ),
-            "Recommended_Action_Type": st.column_config.TextColumn(
-                "Prescriptive Action (Department)",
-                width="large"
-            ),
-            "Net_Impact_M": st.column_config.NumberColumn(
-                "Net ROI ($M)",
-                format="$%.1fM",
-                width="small"
-            )
-        }
+    min_sentiment = data['Avg_Sentiment'].min()
+    max_sentiment = data['Avg_Sentiment'].max()
+    sentiment_threshold = st.sidebar.slider(
+        '3. Max. Average Sentiment (Filter out too positive topics):',
+        min_value=float(min_sentiment),
+        max_value=float(max_sentiment),
+        value=float(max_sentiment), 
+        step=0.01
     )
     
-    st.markdown("<br>", unsafe_allow_html=True)
+    min_freq = data['Frequency'].min()
+    max_freq = data['Frequency'].max()
+    frequency_threshold = st.sidebar.slider(
+        '4. Minimum Topic Frequency (Volume):',
+        min_value=int(min_freq),
+        max_value=int(max_freq),
+        value=int(min_freq),
+        step=100
+    )
     
-    st.markdown("---")
+    filtered_data = data.copy()
+    
+    # filter 1: action type
+    if selected_action != 'All Action Types':
+        filtered_data = filtered_data[filtered_data['Recommended_Action_Type'] == selected_action]
+        
+    # filter 2: net impact
+    filtered_data = filtered_data[filtered_data['Net_Impact_M'] >= net_impact_threshold]
+    
+    # filter 3: sentiment 
+    filtered_data = filtered_data[filtered_data['Avg_Sentiment'] <= sentiment_threshold]
+    
+    # filter 4: frequency
+    filtered_data = filtered_data[filtered_data['Frequency'] >= frequency_threshold]
+    
+    data_for_display = filtered_data.sort_values(by='Priority_Score', ascending=False)
+    
+    data_for_display['Frequency'] = data_for_display['Frequency'].apply(lambda x: f"{x:,.0f}")
+    data_for_display['Avg_Sentiment'] = data_for_display['Avg_Sentiment'].apply(lambda x: f"{x:+.3f}")
+    data_for_display['Cost_of_Fix_M'] = data_for_display['Cost_of_Fix_M'].apply(lambda x: f"${x:,.2f}M")
+    data_for_display['Projected_Gain_M'] = data_for_display['Projected_Gain_M'].apply(lambda x: f"${x:,.2f}M")
+    data_for_display['Net_Impact_M'] = data_for_display['Net_Impact_M'].apply(lambda x: f"${x:,.2f}M")
+    data_for_display['Value_to_Cost_Ratio'] = data_for_display['Value_to_Cost_Ratio'].apply(lambda x: "∞" if np.isinf(x) else f"{x:,.2f}:1")
+    
+    # rename columns for readability
+    data_for_display.rename(columns={
+        'Topic_Name': 'Topic Driver',
+        'Avg_Sentiment': 'Avg Sentiment',
+        'Priority_Score': 'Priority Score',
+        'Cost_of_Fix_M': 'Cost (M)',
+        'Projected_Gain_M': 'Projected Gain (M)',
+        'Net_Impact_M': 'Net Impact (M)',
+        'Value_to_Cost_Ratio': 'ROI (Value:Cost)',
+        'Recommended_Action_Type': 'Recommended Action',
+        'Business_Summary': 'Business Summary'
+    }, inplace=True)
+
+    final_columns = [
+        'Topic Driver', 'Frequency', 'Avg Sentiment', 'Priority Score', 
+        'Net Impact (M)', 'ROI (Value:Cost)', 'Cost (M)', 'Projected Gain (M)',
+        'Recommended Action', 'Business Summary'
+    ]
+    
+    st.dataframe(data_for_display[final_columns], use_container_width=True)
+    
+    st.sidebar.markdown(f"---")
+    st.sidebar.info(f"Showing **{len(data_for_display)}** out of {len(data)} total topics based on current filters.")
+
+
+def display_logic_audit():
+    st.header("4. 🔬 Calculation & Logic Audit: Transparency in Findings")
+    st.markdown(
+        """
+        This section provides the mathematical rationale behind the strategic recommendations, ensuring stakeholders can fully audit the data.
+        """
+    )
+
+    st.subheader("A. Core Financial Metrics")
     st.markdown("""
-        <div style="text-align: center; color: #8B8B8B; font-size: 0.85rem; padding: 2rem 0;">
-            <p>R&D Insight Dashboard | Generated from Customer Review Text Analysis</p>
-            <p>Data visualization powered by Streamlit</p>
-        </div>
-        """, unsafe_allow_html=True)
+    The financial value of each topic is derived from the following formulas:
+    """)
+    
+    col_metric, col_formula = st.columns([1, 2])
+    
+    with col_metric:
+        st.markdown("**Net Impact (M)**")
+        st.markdown("**Value-to-Cost Ratio (ROI)**")
+    
+    with col_formula:
+        st.latex(r"""
+        \text{Net Impact} = \text{Projected\_Gain\_M} - \text{Cost\_of\_Fix\_M}
+        """)
+        st.latex(r"""
+        \text{ROI} = \frac{\text{Projected\_Gain\_M}}{\text{Cost\_of\_Fix\_M}}
+        """)
+    
+    st.subheader("B. Prioritization Logic (Priority Score)")
+    st.markdown(
+        """
+        The **Priority Score** is the final metric used to rank topics. It is a weighted function that ensures investment is directed toward issues that are both **high-value (Net Impact)** and **urgent (negative Sentiment/high Frequency).**
+        """
+    )
+    st.latex(r"""
+        \text{Priority Score} \approx \text{Net Impact} \times (1 - \text{Avg Sentiment}) + \text{Frequency Factor}
+    """)
+    st.markdown("""
+    ---
+    ***Audit Insight:*** The highest ROI topics should be prioritized as they promise the most efficient return on investment. The filters allow users to balance ROI efficiency against absolute Net Impact value.
+    """)
+
+def main():
+    summary_narrative = generate_executive_summary_narrative(total_net_impact, global_roi, df)
+    display_welcome_section(summary_narrative)
+    display_kpi_header(total_net_impact, total_cost, global_roi)
+    display_key_insights(df)
+    display_roadmap_table(df)
+    display_logic_audit()
+
+if __name__ == "__main__":
+    main()
